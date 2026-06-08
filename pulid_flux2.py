@@ -154,7 +154,7 @@ def _read_hidden_dim(double_blocks) -> Optional[int]:
     # Diffusers FluxTransformerBlock: norm1 is the equivalent
     for attr in ("img_norm1", "norm1", "norm"):
         n = getattr(b, attr, None)
-        if n is not None and hasattr(n, "weight"):
+        if n is not None and getattr(n, "weight", None) is not None:
             return n.weight.shape[0]
     # Fallback: read from attention projection in_features
     for path in (("img_attn", "qkv"), ("attn", "to_q"), ("attn", "qkv")):
