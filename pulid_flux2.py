@@ -9,7 +9,7 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 import numpy as np
-from typing import Tuple
+from typing import Optional, Tuple
 import warnings
 
 import comfy.model_management
@@ -139,22 +139,54 @@ def get_flux_inner(model):
     return model
 
 
+_FLUX_VARIANTS: list[tuple[int, int, str]] = [
+    # (max_double, max_single, name) — ordered from smallest to largest
+    ( 6, 22, "klein_4b"),
+    (10, 28, "klein_9b"),
+    (99, 99, "flux2_dev"),  # catch-all for large models (e.g. 32B)
+]
+
+def _read_hidden_dim(double_blocks) -> Optional[int]:
+    if not double_blocks:
+        return None
+    b = double_blocks[0]
+    # ComfyUI DoubleStreamBlock: img_norm1 is LayerNorm(hidden_size)
+    # Diffusers FluxTransformerBlock: norm1 is the equivalent
+    for attr in ("img_norm1", "norm1", "norm"):
+        n = getattr(b, attr, None)
+        if n is not None and hasattr(n, "weight"):
+            return n.weight.shape[0]
+    # Fallback: read from attention projection in_features
+    for path in (("img_attn", "qkv"), ("attn", "to_q"), ("attn", "qkv")):
+        obj = b
+        for a in path:
+            obj = getattr(obj, a, None)
+            if obj is None:
+                break
+        if obj is not None and hasattr(obj, "in_features"):
+            return obj.in_features
+    return None
+
+
 def detect_flux_variant(model) -> Tuple[str, int, int, int]:
-    """Returns variant, hidden dim, number of double blocks, number of single blocks"""
+    """Returns (variant, hidden_dim, n_double, n_single)"""
     dm = get_flux_inner(model)
     double_blocks = getattr(dm, "transformer_blocks", None) or getattr(dm, "double_blocks", [])
     single_blocks = getattr(dm, "single_transformer_blocks", None) or getattr(dm, "single_blocks", [])
     n_double, n_single = len(double_blocks), len(single_blocks)
-    
-    if n_double <= 6 and n_single <= 22:
-        return "klein_4b", 3072, n_double, n_single
-    elif n_double <= 10 and n_single <= 28:
-        return "klein_9b", 4096, n_double, n_single
-    elif n_single >= 40:  # Flux.2 Dev 32B
-        return "flux2_dev", 6144, n_double, n_single
-    else:
-        print(f"[PuLID-Flux2] Unknown variant ({n_double}d/{n_single}s) → fallback klein_9b")
-        return "klein_9b", 4096, n_double, n_single
+
+    name = next(
+        (n for max_d, max_s, n in _FLUX_VARIANTS if n_double <= max_d and n_single <= max_s),
+        "klein_9b",
+    )
+
+    dim = _read_hidden_dim(double_blocks)
+    if dim is None:
+        _DIM_FALLBACKS = {"klein_4b": 3072, "klein_9b": 4096, "flux2_dev": 6144}
+        dim = _DIM_FALLBACKS[name]
+        print(f"[PuLID-Flux2] Could not read hidden_dim from model, using fallback {dim}")
+
+    return name, dim, n_double, n_single
 
 def load_eva_clip(device):
     """Loads the EVA-CLIP model for feature extraction"""
