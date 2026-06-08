@@ -180,11 +180,14 @@ def detect_flux_variant(model) -> Tuple[str, int, int, int]:
         "klein_9b",
     )
 
-    dim = _read_hidden_dim(double_blocks)
-    if dim is None:
+    if (dim := getattr(dm, "hidden_size", None)):
+        print(f"[PuLID-Flux2] hidden_dim={dim} (source: model.hidden_size)")
+    elif (dim := _read_hidden_dim(double_blocks)):
+        print(f"[PuLID-Flux2] hidden_dim={dim} (source: block weight shape)")
+    else:
         _DIM_FALLBACKS = {"klein_4b": 3072, "klein_9b": 4096, "flux2_dev": 6144}
         dim = _DIM_FALLBACKS[name]
-        print(f"[PuLID-Flux2] Could not read hidden_dim from model, using fallback {dim}")
+        print(f"[PuLID-Flux2] hidden_dim={dim} (source: hardcoded fallback for {name})")
 
     return name, dim, n_double, n_single
 
