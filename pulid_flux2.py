@@ -9,6 +9,7 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 import numpy as np
+from collections import OrderedDict
 from typing import Optional, Tuple
 import warnings
 
@@ -496,13 +497,21 @@ class ApplyPuLIDFlux2:
             print(f"[PuLID] 🔄 Projection {id_tokens.shape[-1]} → {flux_dim} ({variant})")
             _cache_key = (id_tokens.shape[-1], flux_dim, str(device))
             if not hasattr(pulid_model, "_dim_cache"):
-                pulid_model._dim_cache = {}
-            if _cache_key not in pulid_model._dim_cache:
+                pulid_model._dim_cache = OrderedDict()
+            cache = pulid_model._dim_cache
+            if _cache_key not in cache:
                 _proj = nn.Linear(id_tokens.shape[-1], flux_dim, bias=False).to(device, dtype=dtype)
                 nn.init.normal_(_proj.weight, std=0.02)
                 _inj = PuLIDFlux2(dim=flux_dim).to(device, dtype=dtype)
-                pulid_model._dim_cache[_cache_key] = (_proj, _inj)
-            proj, injector = pulid_model._dim_cache[_cache_key]
+                if len(cache) >= 2:
+                    _, (_evict_proj, _evict_inj) = cache.popitem(last=False)
+                    _evict_proj.cpu()
+                    _evict_inj.cpu()
+                    del _evict_proj, _evict_inj
+                cache[_cache_key] = (_proj, _inj)
+            else:
+                cache.move_to_end(_cache_key)
+            proj, injector = cache[_cache_key]
             with torch.no_grad():
                 id_tokens = proj(id_tokens)
                 id_tokens = F.normalize(id_tokens, p=2, dim=-1)
