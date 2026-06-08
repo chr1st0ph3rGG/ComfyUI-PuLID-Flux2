@@ -491,13 +491,18 @@ class ApplyPuLIDFlux2:
         # Project if dimension differs (Klein → Dev)
         if id_tokens.shape[-1] != flux_dim:
             print(f"[PuLID] 🔄 Projection {id_tokens.shape[-1]} → {flux_dim} ({variant})")
-            proj = nn.Linear(id_tokens.shape[-1], flux_dim, bias=False).to(device, dtype=dtype)
-            nn.init.normal_(proj.weight, std=0.02)
-            id_tokens = proj(id_tokens)
-            id_tokens = F.normalize(id_tokens, p=2, dim=-1)
-            
-            # Create an injector with the correct dimensions for Dev
-            injector = PuLIDFlux2(dim=flux_dim).to(device, dtype=dtype)
+            _cache_key = (id_tokens.shape[-1], flux_dim, str(device))
+            if not hasattr(pulid_model, "_dim_cache"):
+                pulid_model._dim_cache = {}
+            if _cache_key not in pulid_model._dim_cache:
+                _proj = nn.Linear(id_tokens.shape[-1], flux_dim, bias=False).to(device, dtype=dtype)
+                nn.init.normal_(_proj.weight, std=0.02)
+                _inj = PuLIDFlux2(dim=flux_dim).to(device, dtype=dtype)
+                pulid_model._dim_cache[_cache_key] = (_proj, _inj)
+            proj, injector = pulid_model._dim_cache[_cache_key]
+            with torch.no_grad():
+                id_tokens = proj(id_tokens)
+                id_tokens = F.normalize(id_tokens, p=2, dim=-1)
         else:
             injector = pulid_model
 
@@ -510,10 +515,11 @@ class ApplyPuLIDFlux2:
         # so no wrapper is registered and no patch is applied.
         original_wrapper = work_model.model_options.get("model_function_wrapper", None)
         captured = {"injector": injector, "id_tokens": id_tokens, "strength": strength, "debug": debug_mode}
+        _flux_inner = get_flux_inner(work_model.model)
 
         def pulid_wrapper(model_function, kwargs):
             unpatch = patch_flux(
-                get_flux_inner(work_model.model),
+                _flux_inner,
                 captured["injector"],
                 captured["id_tokens"],
                 captured["strength"],
