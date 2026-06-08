@@ -1,7 +1,7 @@
 """
-ComfyUI-PuLID-Flux2 - VERSION UNIFIÉE KLEIN + DEV32B
-Compatible automatiquement Klein 4B / 9B et Flux.2 Dev 32B
-Version optimisée avec adaptation dynamique à chaque run
+ComfyUI-PuLID-Flux2 - UNIFIED VERSION KLEIN + DEV32B
+Automatically compatible with Klein 4B / 9B and Flux.2 Dev 32B
+Optimized version with dynamic adaptation per run
 """
 
 import os
@@ -15,14 +15,14 @@ import warnings
 import comfy.model_management
 import folder_paths
 
-# Configuration des dossiers
+# Folder configuration
 PULID_DIR = os.path.join(folder_paths.models_dir, "pulid")
 INSIGHTFACE_DIR = os.path.join(folder_paths.models_dir, "insightface")
 os.makedirs(PULID_DIR, exist_ok=True)
 os.makedirs(INSIGHTFACE_DIR, exist_ok=True)
 
 # ============================================================================
-# CACHE GLOBAL
+# GLOBAL CACHE
 # ============================================================================
 _MODEL_CACHE = {
     "eva_clip": None,
@@ -44,7 +44,7 @@ def get_cached_model(model_type: str, device: torch.device, loader_func):
     return model
 
 # ============================================================================
-# Classes d'attention
+# Attention classes
 # ============================================================================
 class PerceiverAttentionCA(nn.Module):
     def __init__(self, dim: int = 4096, dim_head: int = 64, heads: int = 16):
@@ -111,13 +111,13 @@ class IDFormer(nn.Module):
 
 
 class PuLIDFlux2(nn.Module):
-    """Modèle PuLID – peut être créé avec n’importe quelle dim"""
+    """PuLID model – can be created with any dim"""
     def __init__(self, dim: int = 4096):
         super().__init__()
         self.dim = dim
         self.id_former = IDFormer(dim=dim)
-        self.double_ca = nn.ModuleList([PerceiverAttentionCA(dim=dim) for _ in range(12)])   # plus flexible
-        self.single_ca = nn.ModuleList([PerceiverAttentionCA(dim=dim) for _ in range(60)])   # supporte Dev32B (48 single)
+        self.double_ca = nn.ModuleList([PerceiverAttentionCA(dim=dim) for _ in range(12)])   # more flexible
+        self.single_ca = nn.ModuleList([PerceiverAttentionCA(dim=dim) for _ in range(60)])   # supports Dev32B (48 single)
 
     @classmethod
     def from_pretrained(cls, path: str):
@@ -129,7 +129,7 @@ class PuLIDFlux2(nn.Module):
 
 
 # ============================================================================
-# Utilitaires
+# Utilities
 # ============================================================================
 def get_flux_inner(model):
     if hasattr(model, "model"):
@@ -140,7 +140,7 @@ def get_flux_inner(model):
 
 
 def detect_flux_variant(model) -> Tuple[str, int, int, int]:
-    """Retourne variante, dim cachée, nb double blocks, nb single blocks"""
+    """Returns variant, hidden dim, number of double blocks, number of single blocks"""
     dm = get_flux_inner(model)
     double_blocks = getattr(dm, "transformer_blocks", None) or getattr(dm, "double_blocks", [])
     single_blocks = getattr(dm, "single_transformer_blocks", None) or getattr(dm, "single_blocks", [])
@@ -153,11 +153,11 @@ def detect_flux_variant(model) -> Tuple[str, int, int, int]:
     elif n_single >= 40:  # Flux.2 Dev 32B
         return "flux2_dev", 6144, n_double, n_single
     else:
-        print(f"[PuLID-Flux2] Variante inconnue ({n_double}d/{n_single}s) → fallback klein_9b")
+        print(f"[PuLID-Flux2] Unknown variant ({n_double}d/{n_single}s) → fallback klein_9b")
         return "klein_9b", 4096, n_double, n_single
 
 def load_eva_clip(device):
-    """Charge le modèle EVA-CLIP pour l'extraction des features"""
+    """Loads the EVA-CLIP model for feature extraction"""
     try:
         import open_clip
         model, _, _ = open_clip.create_model_and_transforms(
@@ -168,11 +168,11 @@ def load_eva_clip(device):
         visual.eval().to(device)
         return visual
     except Exception as e:
-        warnings.warn(f"[PuLID] Erreur lors du chargement d'EVA-CLIP: {e}")
+        warnings.warn(f"[PuLID] Error loading EVA-CLIP: {e}")
         return None
 
 def get_ca_index(block_idx: int, total_blocks: int, num_ca: int) -> int:
-    """Distribution intelligente des couches CA sur tous les blocks (même Dev32B)"""
+    """Evenly distributes CA layers across all blocks (including Dev32B)"""
     if total_blocks <= num_ca:
         return block_idx
     return int(block_idx * num_ca / total_blocks)
@@ -255,10 +255,10 @@ def patch_flux(model, pulid_module, id_tokens, strength, debug=False):
 
 
 # ============================================================================
-# Nodes ComfyUI (inchangés sauf ApplyPuLIDFlux2)
+# ComfyUI nodes
 # ============================================================================
 class PuLIDInsightFaceLoader:
-    """Charge InsightFace pour la détection et l'analyse des visages"""
+    """Loads InsightFace for face detection and analysis"""
     @classmethod
     def INPUT_TYPES(cls):
         return {
@@ -289,17 +289,17 @@ class PuLIDInsightFaceLoader:
                 app.prepare(ctx_id=0, det_size=(640, 640))
                 return app
             except Exception as e:
-                raise RuntimeError(f"[PuLID] Erreur lors du chargement d'InsightFace: {e}")
+                raise RuntimeError(f"[PuLID] Error loading InsightFace: {e}")
         
         device = comfy.model_management.get_torch_device()
         model = get_cached_model("insightface", device, _load_insightface)
         
-        print(f"✅ InsightFace chargé (provider={provider}, cache={'HIT' if _MODEL_CACHE['insightface'] else 'MISS'})")
+        print(f"✅ InsightFace loaded (provider={provider}, cache={'HIT' if _MODEL_CACHE['insightface'] else 'MISS'})")
         return (model,)
 
 
 class PuLIDEVACLIPLoader:
-    """Charge EVA-CLIP pour l'extraction des features visuelles"""
+    """Loads EVA-CLIP for visual feature extraction"""
     @classmethod
     def INPUT_TYPES(cls):
         return {"required": {}}
@@ -313,14 +313,14 @@ class PuLIDEVACLIPLoader:
         model = get_cached_model("eva_clip", device, load_eva_clip)
         
         if model is None:
-            raise RuntimeError("[PuLID] EVA-CLIP non disponible. Vérifiez l'installation d'open_clip.")
+            raise RuntimeError("[PuLID] EVA-CLIP not available. Check open_clip installation.")
         
-        print(f"✅ EVA-CLIP chargé (cache={'HIT' if _MODEL_CACHE['eva_clip'] else 'MISS'})")
+        print(f"✅ EVA-CLIP loaded (cache={'HIT' if _MODEL_CACHE['eva_clip'] else 'MISS'})")
         return (model,)
 
 
 class PuLIDModelLoader:
-    """Charge le modèle PuLID depuis un fichier .safetensors ou .pt"""
+    """Loads the PuLID model from a .safetensors or .pt file"""
     @classmethod
     def INPUT_TYPES(cls):
         if not os.path.exists(PULID_DIR):
@@ -343,13 +343,13 @@ class PuLIDModelLoader:
     
     def load(self, pulid_file):
         if pulid_file == "__create_new__":
-            print("⚠️  Création d'un nouveau modèle PuLID (non entraîné)")
+            print("⚠️  Creating a new PuLID model (untrained)")
             return (PuLIDFlux2(dim=4096),)
         
         path = os.path.join(PULID_DIR, pulid_file)
         
         if not os.path.exists(path):
-            raise FileNotFoundError(f"[PuLID] Fichier introuvable: {path}")
+            raise FileNotFoundError(f"[PuLID] File not found: {path}")
         
         try:
             if path.endswith(".safetensors"):
@@ -362,10 +362,10 @@ class PuLIDModelLoader:
                 model = PuLIDFlux2.from_pretrained(path)
             
             model.eval()
-            print(f"✅ Modèle PuLID chargé: {pulid_file} (dim={model.dim})")
+            print(f"✅ PuLID model loaded: {pulid_file} (dim={model.dim})")
             return (model,)
         except Exception as e:
-            raise RuntimeError(f"[PuLID] Erreur lors du chargement du modèle: {e}")
+            raise RuntimeError(f"[PuLID] Error loading model: {e}")
 
 class ApplyPuLIDFlux2:
     @classmethod
@@ -395,11 +395,11 @@ class ApplyPuLIDFlux2:
         device = comfy.model_management.get_torch_device()
         dtype = torch.bfloat16
 
-        # Extraction visage + embeddings (identique à ton code original)
+        # Face extraction + embeddings
         img_np = (image[0].numpy() * 255).astype(np.uint8)
         faces = face_analysis.get(img_np)
         if not faces:
-            print("⚠️ [PuLID] AUCUN VISAGE → retour sans modification")
+            print("⚠️ [PuLID] NO FACE DETECTED → returning without modification")
             return (model,)
         
         faces = sorted(faces, key=lambda f: (f.bbox[2]-f.bbox[0])*(f.bbox[3]-f.bbox[1]), reverse=True)
@@ -410,7 +410,7 @@ class ApplyPuLIDFlux2:
         id_embed = torch.from_numpy(face.embedding).unsqueeze(0).to(device, dtype=dtype)
         id_embed = F.normalize(id_embed, dim=-1)
 
-        # Crop + EVA-CLIP (identique)
+        # Crop + EVA-CLIP
         x1, y1, x2, y2 = face.bbox.astype(int)
         margin = int(max(x2-x1, y2-y1) * 0.2)
         x1, y1 = max(0, x1-margin), max(0, y1-margin)
@@ -456,7 +456,7 @@ class ApplyPuLIDFlux2:
                   
         variant, flux_dim, n_double, n_single = detect_flux_variant(dm)
 
-        # Projection si dimension différente (Klein → Dev)
+        # Project if dimension differs (Klein → Dev)
         if id_tokens.shape[-1] != flux_dim:
             print(f"[PuLID] 🔄 Projection {id_tokens.shape[-1]} → {flux_dim} ({variant})")
             proj = nn.Linear(id_tokens.shape[-1], flux_dim, bias=False).to(device, dtype=dtype)
@@ -464,7 +464,7 @@ class ApplyPuLIDFlux2:
             id_tokens = proj(id_tokens)
             id_tokens = F.normalize(id_tokens, p=2, dim=-1)
             
-            # Création d'un injector avec les bonnes dimensions pour Dev
+            # Create an injector with the correct dimensions for Dev
             injector = PuLIDFlux2(dim=flux_dim).to(device, dtype=dtype)
         else:
             injector = pulid_model
@@ -502,7 +502,7 @@ class ApplyPuLIDFlux2:
         return (work_model,)
 
 class PuLIDFacePreview:
-    """Affiche les visages détectés avec leur index et informations de confiance"""
+    """Displays detected faces with their index and confidence score"""
     @classmethod
     def INPUT_TYPES(cls):
         return {
@@ -528,7 +528,7 @@ class PuLIDFacePreview:
             faces = face_analysis.get(img_np)
             
             if not faces:
-                # Ajouter un message "No faces detected"
+                # Add a "No faces detected" message
                 h, w = img_bgr.shape[:2]
                 cv2.putText(img_bgr, "No faces detected", (w//2-100, h//2), 
                            cv2.FONT_HERSHEY_SIMPLEX, 1.0, (0,0,255), 2)
@@ -536,10 +536,10 @@ class PuLIDFacePreview:
                 for i, face in enumerate(faces):
                     x1, y1, x2, y2 = face.bbox.astype(int)
                     
-                    # Rectangle vert autour du visage
+                    # Green rectangle around the face
                     cv2.rectangle(img_bgr, (x1, y1), (x2, y2), (0,255,0), 2)
                     
-                    # Label avec index
+                    # Label with index
                     label = f"Face {i}"
                     if show_confidence and hasattr(face, 'det_score'):
                         label += f" ({face.det_score:.2f})"
@@ -547,7 +547,7 @@ class PuLIDFacePreview:
                     cv2.putText(img_bgr, label, (x1, y1-8), 
                                cv2.FONT_HERSHEY_SIMPLEX, 0.6, (0,255,0), 2)
                     
-                    # Afficher la taille du visage
+                    # Show face size
                     size = f"{x2-x1}x{y2-y1}"
                     cv2.putText(img_bgr, size, (x1, y2+20), 
                                cv2.FONT_HERSHEY_SIMPLEX, 0.4, (0,255,0), 1)
@@ -555,14 +555,14 @@ class PuLIDFacePreview:
             img_rgb = cv2.cvtColor(img_bgr, cv2.COLOR_BGR2RGB)
             out = torch.from_numpy(img_rgb.astype(np.float32) / 255.0).unsqueeze(0)
             
-            print(f"[PuLID Preview] Visages détectés: {len(faces)}")
+            print(f"[PuLID Preview] Faces detected: {len(faces)}")
             return (out,)
         except Exception as e:
-            print(f"[PuLID Preview] Erreur: {e}")
+            print(f"[PuLID Preview] Error: {e}")
             return (image,)
 
 # ============================================================================
-# Enregistrement des nodes
+# Node registration
 # ============================================================================
 NODE_CLASS_MAPPINGS = {
     "PuLIDInsightFaceLoader": PuLIDInsightFaceLoader,
