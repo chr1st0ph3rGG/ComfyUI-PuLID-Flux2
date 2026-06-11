@@ -280,3 +280,75 @@ Same license as v1 (to be defined based on the original repo)
 **Version:** 2.0.0  
 **Date:** March 27, 2026  
 **Tested on:** RTX 3090, PyTorch 2.4.0, ComfyUI 0.18.1
+
+---
+
+## 🔧 Patch — June 8–11, 2026
+
+### 1. **Data-driven variant detection** (`ba4ea7f`)
+
+**Problem:** `detect_flux_variant` used a chain of `if/elif` with hardcoded
+block counts. Adding a new variant meant touching the branching logic.
+
+**Fix:** Replaced with a declarative `_FLUX_VARIANTS` lookup table
+`(max_double, max_single, name)` and a `next()` scan — new variants are a
+one-line addition.
+
+---
+
+### 2. **Dynamic hidden-dim resolution** (`ba4ea7f`, `956543a`, `80b018f`)
+
+**Problem:** Hidden dimension was hardcoded per variant. Loading a non-standard
+checkpoint (e.g. a quantised or fine-tuned model) silently used the wrong dim,
+causing shape mismatches downstream.
+
+**Fix:** Added `_read_hidden_dim()` which reads the actual weight shape from the
+first double block's LayerNorm (`img_norm1 / norm1 / norm`) or attention
+projection (`in_features`). `detect_flux_variant` now queries sources in
+priority order:
+
+1. `model.hidden_size` attribute (fastest)
+2. `_read_hidden_dim()` from block weights (reliable fallback)
+3. Hardcoded per-variant constant (last resort, prints a warning)
+
+Attribute access uses `getattr(n, "weight", None) is not None` instead of
+`hasattr` to correctly handle attributes that exist but are set to `None`.
+
+Each source logs which path was taken:
+```
+[PuLID-Flux2] hidden_dim=4096 (source: block weight shape)
+```
+
+---
+
+### 3. **Dimension-projection cache** (`97a875f`)
+
+**Problem:** When Klein tokens needed projecting to Dev dimensions, a new
+`nn.Linear` + `PuLIDFlux2` pair was created on every single run — up to
+~500 MB of VRAM allocated and discarded each generation.
+
+**Fix:** Result is cached on `pulid_model._dim_cache` keyed by
+`(src_dim, flux_dim, device)`, so the projection layers are created once and
+reused. Also extracted `_flux_inner = get_flux_inner(work_model.model)` outside
+the `pulid_wrapper` closure to avoid repeated attribute traversal per sampler
+step.
+
+---
+
+### 4. **`_dim_cache` LRU limit** (`0809581`, June 11 session)
+
+**Problem:** `_dim_cache` was an unbounded `dict`. With many model/device
+combinations the cache would grow without bound.
+
+**Fix:** Upgraded to an `OrderedDict`-based LRU capped at 2 entries. On
+eviction the displaced pair is explicitly moved to CPU and deleted:
+
+```python
+if len(cache) >= 2:
+    _, (_evict_proj, _evict_inj) = cache.popitem(last=False)
+    _evict_proj.cpu(); _evict_inj.cpu()
+    del _evict_proj, _evict_inj
+```
+
+Limit of 2 covers the typical dual-model workflow (Klein + Dev) without ever
+holding more than one stale projection in VRAM.

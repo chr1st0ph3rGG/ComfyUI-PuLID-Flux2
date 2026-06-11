@@ -280,3 +280,77 @@ Même license que v1 (à définir selon le repo original)
 **Version:** 2.0.0  
 **Date:** 27 mars 2026  
 **Tested on:** RTX 3090, PyTorch 2.4.0, ComfyUI 0.18.1
+
+---
+
+## 🔧 Patch — 8–11 juin 2026
+
+### 1. **Détection de variante pilotée par données** (`ba4ea7f`)
+
+**Problème:** `detect_flux_variant` utilisait une chaîne `if/elif` avec des
+comptages de blocs codés en dur. Ajouter une variante nécessitait de modifier
+la logique de branchement.
+
+**Fix:** Remplacé par une table déclarative `_FLUX_VARIANTS`
+`(max_double, max_single, name)` avec un scan `next()` — une nouvelle variante
+s'ajoute en une ligne.
+
+---
+
+### 2. **Résolution dynamique de la dimension cachée** (`ba4ea7f`, `956543a`, `80b018f`)
+
+**Problème:** La dimension cachée était codée en dur par variante. Charger un
+checkpoint non standard (quantisé ou fine-tuné) utilisait silencieusement la
+mauvaise dimension, causant des erreurs de shape en aval.
+
+**Fix:** Ajout de `_read_hidden_dim()` qui lit la shape réelle des poids depuis
+le LayerNorm du premier double block (`img_norm1 / norm1 / norm`) ou la
+projection d'attention (`in_features`). `detect_flux_variant` consulte
+maintenant les sources par ordre de priorité :
+
+1. Attribut `model.hidden_size` (plus rapide)
+2. `_read_hidden_dim()` depuis les poids des blocs (fallback fiable)
+3. Constante codée en dur par variante (dernier recours, affiche un warning)
+
+L'accès aux attributs utilise `getattr(n, "weight", None) is not None` au lieu
+de `hasattr` pour gérer correctement les attributs existants mais valant `None`.
+
+Chaque source logue le chemin emprunté :
+```
+[PuLID-Flux2] hidden_dim=4096 (source: block weight shape)
+```
+
+---
+
+### 3. **Cache de projection dimensionnelle** (`97a875f`)
+
+**Problème:** Quand les tokens Klein devaient être projetés vers les dimensions
+Dev, une nouvelle paire `nn.Linear` + `PuLIDFlux2` était créée à chaque run —
+jusqu'à ~500 Mo de VRAM alloués et jetés à chaque génération.
+
+**Fix:** Le résultat est mis en cache sur `pulid_model._dim_cache` avec la clé
+`(src_dim, flux_dim, device)`, les couches de projection sont donc créées une
+fois et réutilisées. `_flux_inner = get_flux_inner(work_model.model)` est aussi
+extrait en dehors de la closure `pulid_wrapper` pour éviter la traversée répétée
+d'attributs à chaque step du sampler.
+
+---
+
+### 4. **Limite LRU sur `_dim_cache`** (`0809581`, session 11 juin)
+
+**Problème:** `_dim_cache` était un `dict` non borné. Avec de nombreuses
+combinaisons modèle/device le cache pouvait grossir sans limite.
+
+**Fix:** Passé à un LRU basé sur `OrderedDict`, limité à 2 entrées. À
+l'éviction, la paire déplacée est explicitement rebasculée sur CPU puis
+supprimée :
+
+```python
+if len(cache) >= 2:
+    _, (_evict_proj, _evict_inj) = cache.popitem(last=False)
+    _evict_proj.cpu(); _evict_inj.cpu()
+    del _evict_proj, _evict_inj
+```
+
+La limite de 2 couvre le workflow dual-modèle typique (Klein + Dev) sans jamais
+conserver plus d'une projection obsolète en VRAM.
